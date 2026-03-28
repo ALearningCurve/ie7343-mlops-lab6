@@ -1,0 +1,18 @@
+[project]
+name = "ie7343-mlops-lab6"
+version = "0.1.0"
+description = "Lab 6: FastAPI inference service with GCS model publishing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+  "scikit-learn>=1.5.0",
+  "joblib>=1.4.0",
+  "google-cloud-storage>=2.18.0",
+  "pydantic>=2.8.0",
+  "python-dotenv>=1.0.1"
+]
+
+[tool.uv]
+dev-dependencies = []

@@ -1,0 +1,29 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - MODEL_BUCKET=${MODEL_BUCKET}
+      - MODEL_OBJECT=${MODEL_OBJECT:-models/classifier.joblib}
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-${HOME}/.config/gcloud/application_default_credentials.json}:/root/.config/gcloud/application_default_credentials.json:ro
+
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uv", "run", "python", "train_model.py"]
+    environment:
+      - MODEL_BUCKET=${MODEL_BUCKET}
+      - MODEL_OBJECT=${MODEL_OBJECT:-models/classifier.joblib}
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST:-${HOME}/.config/gcloud/application_default_credentials.json}:/root/.config/gcloud/application_default_credentials.json:ro

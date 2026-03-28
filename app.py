@@ -1,46 +1,97 @@
-from flask import Flask
-from google.cloud import storage, bigquery
+from __future__ import annotations
+
 import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
-app = Flask(__name__)
+import joblib
+from fastapi import FastAPI, HTTPException
+from google.cloud import storage
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
-@app.route('/')
-def hello_world():
-    return "Hello from the intermediate lab!"
 
-@app.route('/upload')
-def upload_file():
-    # Initialize Cloud Storage client
-    storage_client = storage.Client()
-    bucket_name = os.environ.get('BUCKET_NAME')
+MODEL_DIR = Path("artifacts")
+MODEL_PATH = MODEL_DIR / "classifier.joblib"
+
+# Load .env for local development while preserving existing env vars.
+load_dotenv(override=False)
+
+app = FastAPI(title="Lab 6 Inference API", version="1.0.0")
+
+
+class InferenceRequest(BaseModel):
+    features: list[float] = Field(
+        ...,
+        description="List of 30 feature values for the breast cancer classifier.",
+        min_length=1,
+    )
+
+
+class InferenceResponse(BaseModel):
+    predicted_class: int
+    probabilities: list[float]
+    model_source: str
+
+
+def ensure_model_available(model_path: Path) -> str:
+    """Ensure the model exists locally, downloading from GCS if configured."""
+    if model_path.exists():
+        return "local"
+
+    bucket_name = os.environ.get("MODEL_BUCKET")
+    object_name = os.environ.get("MODEL_OBJECT", "models/classifier.joblib")
     if not bucket_name:
-        return 'BUCKET_NAME environment variable is not set.', 500
+        raise RuntimeError(
+            "Model file not found locally and MODEL_BUCKET is not configured."
+        )
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob('hello.txt')
-    blob.upload_from_string('Hello, Cloud Storage!')
-    return f'File uploaded to {bucket_name}.'
+    blob = bucket.blob(object_name)
+    blob.download_to_filename(str(model_path))
+    return f"gcs://{bucket_name}/{object_name}"
 
-@app.route('/query')
-def query_bigquery():
-    # Initialize BigQuery client
-    client = bigquery.Client()
-    query = """
-        SELECT name, SUM(number) as total
-        FROM `bigquery-public-data.usa_names.usa_1910_current`
-        WHERE state = 'TX'
-        GROUP BY name
-        ORDER BY total DESC
-        LIMIT 10
-    """
-    query_job = client.query(query)
-    results = query_job.result()
-    names = [row.name for row in results]
-    return f'Top names in Texas: {", ".join(names)}'
 
-if __name__ == "__main__":
-    import os
+@lru_cache(maxsize=1)
+def load_model() -> tuple[Any, str]:
+    """Load and cache the model to avoid reloading on every request."""
+    source = ensure_model_available(MODEL_PATH)
+    model = joblib.load(MODEL_PATH)
+    return model, source
 
-    port = int(os.environ.get("PORT", 8080))
 
-    app.run(host="0.0.0.0", port=port)  # Flask
-    # uvicorn app:app --host 0.0.0.0 --port $PORT  # FastAPI
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"message": "FastAPI MLOps Lab 6 service is running."}
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/inference", response_model=InferenceResponse)
+def inference(payload: InferenceRequest) -> InferenceResponse:
+    model, model_source = load_model()
+
+    expected_features = getattr(model, "n_features_in_", None)
+    if expected_features is not None and len(payload.features) != int(expected_features):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid feature vector length. "
+                f"Expected {expected_features} values, received {len(payload.features)}."
+            ),
+        )
+
+    prediction = model.predict([payload.features])[0]
+    probabilities = model.predict_proba([payload.features])[0].tolist()
+
+    return InferenceResponse(
+        predicted_class=int(prediction),
+        probabilities=[float(p) for p in probabilities],
+        model_source=model_source,
+    )
